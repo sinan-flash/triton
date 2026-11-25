@@ -384,9 +384,19 @@ static void disableLICM(LLVM::BrOp latchBr) {
 static void forEachCapture(TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
                            ValueRange captures,
                            const TargetInfoBase &targetInfo,
+                           const WarpSpecializeCallbacks &callbacks,
                            llvm::function_ref<void(Value, Value)> access) {
   if (captures.empty())
     return;
+  SmallVector<Value> sortedCaptures;
+  if (callbacks.captureAlignment) {
+    llvm::append_range(sortedCaptures, captures);
+    llvm::stable_sort(sortedCaptures, [&](Value a, Value b) {
+      return callbacks.captureAlignment(a.getType()) >
+             callbacks.captureAlignment(b.getType());
+    });
+    captures = ValueRange(sortedCaptures);
+  }
   auto type = LLVM::LLVMStructType::getLiteral(
       b.getContext(), llvm::to_vector(captures.getTypes()), /*isPacked=*/true);
   Value base = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
@@ -407,10 +417,11 @@ static void rewritePartitionRegion(WarpSpecializeOp ws, Region &partition,
                                RegisterReallocPhase::WorkerPartitionStart,
                                partition.getRegionNumber());
 
-  forEachCapture(
-      b, ws, partition.getArguments(), targetInfo, [&](Value arg, Value ptr) {
-        b.replaceAllUsesWith(arg, b.load(arg.getType(), ptr, /*align=*/1));
-      });
+  forEachCapture(b, ws, partition.getArguments(), targetInfo, callbacks,
+                 [&](Value arg, Value ptr) {
+                   b.replaceAllUsesWith(
+                       arg, b.load(arg.getType(), ptr, /*align=*/1));
+                 });
   partition.front().eraseArguments(0, partition.getNumArguments());
 
   // Capture storage can be reused as soon as all workers have read it.
@@ -444,7 +455,7 @@ static void rewriteDefaultRegion(WarpSpecializeOp ws,
   b.setInsertionPointToEnd(before);
   auto partOp = ws.getPartitionOp();
   forEachCapture(
-      b, ws, partOp.getOperands(), targetInfo,
+      b, ws, partOp.getOperands(), targetInfo, callbacks,
       [&](Value value, Value ptr) { b.store(value, ptr, /*align=*/1); });
   callbacks.createAllBarrier(b, barrierId);
   callbacks.reallocRegisters(b, ws, RegisterReallocPhase::DefaultPartitionStart,

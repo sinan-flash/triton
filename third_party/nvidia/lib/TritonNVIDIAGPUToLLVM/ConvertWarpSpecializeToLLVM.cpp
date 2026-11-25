@@ -8,11 +8,15 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/TypeToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/WarpSpecializeUtility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/TargetParser/Triple.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTWARPSPECIALIZETOLLVM
@@ -200,7 +204,14 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   if (emitDynamicRegRealloc && maxnreg)
     createRegRealloc(b, maxnreg.getInt(), defRegs);
 
+  llvm::LLVMContext llvmContext;
+  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+  llvm::DataLayout layout(
+      llvm::Triple("nvptx64-nvidia-cuda").computeDataLayout("shortptr"));
   WarpSpecializeCallbacks callbacks;
+  callbacks.captureAlignment = [&](Type type) {
+    return layout.getABITypeAlign(typeTranslator.translateType(type)).value();
+  };
   if (auto regs = wsOps.front().getActualRegisters();
       direct && emitDynamicRegRealloc && regs) {
     // AllocateWarpGroups assigns a single limit to each hardware warpgroup.

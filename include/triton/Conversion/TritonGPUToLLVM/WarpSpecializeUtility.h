@@ -91,6 +91,9 @@ struct WarpSpecializeCallbacks {
   /// For direct dispatch, each partition uses the register adjustment of its
   /// representative. An empty map or a -1 entry requires no adjustment.
   SmallVector<int32_t> workerRegisterPartitions;
+
+  /// Order physical capture fields by target ABI alignment when available.
+  std::function<uint64_t(Type)> captureAlignment;
 };
 
 /// A single site can dispatch directly if every returning path executes it

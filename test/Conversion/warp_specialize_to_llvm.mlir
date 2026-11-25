@@ -443,10 +443,10 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
   // AMD-NEXT: rocdl.barrier
 
   // CHECK: [[PAYLOAD]]:
-  // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]] <alignment = 1>
-  // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
+  // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i64, i32)>
   // CHECK-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] <alignment = 1>
+  // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i64, i32)>
+  // CHECK-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]] <alignment = 1>
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: "use"([[ARG0]], [[ARG1]])
   // CHECK-NEXT: llvm.br [[JOIN]]
@@ -456,10 +456,10 @@ llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: [[DEFAULT]]:
   // CHECK: [[INS:%.*]]:2 = "produce"()
-  // CHECK: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] <alignment = 1>
-  // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
+  // CHECK: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i64, i32)>
   // CHECK-NEXT: llvm.store [[INS]]#1, [[ARG1_PTR]] <alignment = 1>
+  // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_ADDR]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i64, i32)>
+  // CHECK-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] <alignment = 1>
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
 
@@ -1289,4 +1289,28 @@ llvm.func @gsan_dynamic_register_reallocation_disabled() attributes {allocation.
   llvm.return
 }
 
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+  // CHECK-LABEL: @mixed_capture_layout
+  llvm.func @mixed_capture_layout() {
+    %v:4 = "produce"() : () -> (i8, !llvm.struct<(ptr<3>, i32)>, f64, !llvm.ptr<1>)
+    ttg.warp_specialize(%v#0, %v#1, %v#2, %v#3) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+    default { ttg.warp_yield }
+    partition0(%small: i8, %view: !llvm.struct<(ptr<3>, i32)>, %scale: f64, %ptr: !llvm.ptr<1>) num_warps(4) {
+      // CHECK: llvm.getelementptr {{.*}}[0, 0] {{.*}}!llvm.struct<packed (f64, ptr<1>, struct<(ptr<3>, i32)>, i8)>
+      // CHECK-NEXT: [[SCALE:%.*]] = llvm.load
+      // CHECK: [[PTR:%.*]] = llvm.load
+      // CHECK: [[VIEW:%.*]] = llvm.load
+      // CHECK: [[SMALL:%.*]] = llvm.load
+      // CHECK: "use"([[SMALL]], [[VIEW]], [[SCALE]], [[PTR]])
+      "use"(%small, %view, %scale, %ptr) : (i8, !llvm.struct<(ptr<3>, i32)>, f64, !llvm.ptr<1>) -> ()
+      ttg.warp_return
+    } : (i8, !llvm.struct<(ptr<3>, i32)>, f64, !llvm.ptr<1>) -> ()
+    llvm.return
+  }
 }
